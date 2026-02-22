@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Controlled 3D Planet</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        /* --- RESET & LAYOUT --- */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #050510;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden; /* Prevent scrollbars */
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* --- BACKGROUND & CANVAS --- */
+        #star-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }
+
+        /* --- THE 3D PLANET --- */
+        .planet-container {
+            position: relative;
+            z-index: 10;
+            /* Will be moved by JS */
+            will-change: transform; 
+        }
+
+        .planet {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            /* 3D Gradient Effect */
+            background: radial-gradient(circle at 30% 30%, 
+                #4facfe, 
+                #00f2fe 40%, 
+                #3a228a 85%, 
+                #050510 100%);
+            
+            /* Inner shadow for depth and Outer shadow for glow */
+            box-shadow: 
+                inset -20px -20px 50px rgba(0,0,0,0.8),
+                0 0 50px rgba(79, 172, 254, 0.4),
+                0 0 100px rgba(79, 172, 254, 0.1);
+            
+            animation: breathe 6s ease-in-out infinite alternate, rotateTexture 20s linear infinite;
+            position: relative;
+        }
+
+        /* Texture overlay for planet details */
+        .planet::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            border-radius: 50%;
+            background: repeating-linear-gradient(
+                -45deg,
+                rgba(255,255,255,0.05) 0px,
+                rgba(255,255,255,0.05) 2px,
+                transparent 2px,
+                transparent 10px
+            );
+            mix-blend-mode: overlay;
+        }
+
+        /* Soft Halo Ring */
+        .halo {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 260px; height: 260px;
+            transform: translate(-50%, -50%);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            box-shadow: 0 0 20px rgba(0, 242, 254, 0.1);
+            pointer-events: none;
+        }
+
+        /* Small floating label */
+        .planet-label {
+            position: absolute;
+            top: 110%;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.6);
+            white-space: nowrap;
+            letter-spacing: 1px;
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,1);
+        }
+
+        /* --- UI ELEMENTS --- */
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            z-index: 100;
+            pointer-events: none; /* Let clicks pass through */
+        }
+
+        .status-text {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 8px 16px;
+            border-radius: 20px;
+            display: inline-block;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255,255,255,0.1);
+            font-size: 0.9rem;
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 100;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(4px);
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 0.25);
+            transform: translateY(-2px);
+        }
+
+        /* Hidden video element required for MediaPipe */
+        .input_video {
+            display: none;
+        }
+
+        /* --- ANIMATIONS --- */
+        @keyframes breathe {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.05); }
+        }
+
+        @keyframes rotateTexture {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Utility class to turn off glow */
+        .no-glow {
+            box-shadow: inset -20px -20px 50px rgba(0,0,0,0.9) !important;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="star-canvas"></canvas>
+
+    <div class="ui-overlay">
+        <div id="status" class="status-text">
+            Initializing camera... please allow permissions.
+        </div>
+    </div>
+
+    <div class="planet-container" id="planetContainer">
+        <div class="planet" id="planet"></div>
+        <div class="halo"></div>
+        <div class="planet-label">Move hand to control</div>
+    </div>
+
+    <div class="controls">
+        <button id="toggleGlowBtn">Toggle Glow</button>
+    </div>
+
+    <video class="input_video"></video>
+
+    <script>
+        // --- CONFIGURATION ---
+        const config = {
+            smoothness: 0.08, // Lower = smoother but slower (0.01 - 0.2)
+            maxMoveX: 400,    // Max pixels planet can move Left/Right
+            maxMoveY: 250,    // Max pixels planet can move Up/Down
+            parallaxFactor: 0.05 // How much stars move relative to planet
+        };
+
+        // --- DOM ELEMENTS ---
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const planetContainer = document.getElementById('planetContainer');
+        const planet = document.getElementById('planet');
+        const statusText = document.getElementById('status');
+        const toggleBtn = document.getElementById('toggleGlowBtn');
+        const canvas = document.getElementById('star-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- STATE VARIABLES ---
+        let targetX = 0;
+        let targetY = 0;
+        let currentX = 0;
+        let currentY = 0;
+        let isHandDetected = false;
+        let isGlowOn = true;
+
+        // --- 1. STAR BACKGROUND (CANVAS) ---
+        let stars = [];
+        let width, height;
+
+        function resizeCanvas() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+            initStars();
+        }
+
+        function initStars() {
+            stars = [];
+            const starCount = 200;
+            for (let i = 0; i < starCount; i++) {
+                stars.push({
+                    x: Math.random() * width,
+                    y: Math.random() * height,
+                    size: Math.random() * 2,
+                    alpha: Math.random(),
+                    speed: Math.random() * 0.5
+                });
+            }
+        }
+
+        function drawStars(offsetX, offsetY) {
+            // Fill background
+            // We use a slight opacity to create a tiny trail effect
+            ctx.fillStyle = 'rgba(5, 5, 16, 0.4)'; 
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.fillStyle = 'white';
+            stars.forEach(star => {
+                // Parallax logic: Move stars opposite to planet movement
+                let renderX = star.x + (offsetX * config.parallaxFactor * star.size);
+                let renderY = star.y + (offsetY * config.parallaxFactor * star.size);
+
+                // Wrap around screen
+                if (renderX > width) renderX -= width;
+                if (renderX < 0) renderX += width;
+                
+                ctx.globalAlpha = star.alpha;
+                ctx.beginPath();
+                ctx.arc(renderX, renderY, star.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1.0;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // --- 2. HAND TRACKING LOGIC (MEDIAPIPE) ---
+        
+        // Helper: Linear Interpolation for smoothing
+        function lerp(start, end, amt) {
+            return (1 - amt) * start + amt * end;
+        }
+
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                isHandDetected = true;
+                statusText.innerText = "Hand detected. Controlling planet...";
+                statusText.style.borderColor = "#00f2fe";
+
+                // Get the first hand detected
+                const landmarks = results.multiHandLandmarks[0];
+
+                // Use the wrist (index 0) or middle finger mcp (index 9) for stability
+                // Using Index 9 (Middle Finger MCP) is often more "central" to the hand visual
+                const handX = landmarks[9].x; 
+                const handY = landmarks[9].y;
+
+                // Map Normalized Coordinates (0.0 - 1.0) to Screen Offset
+                // Note: Webcam video is mirrored, so 0 is right in video, but left on screen.
+                // We reverse X: (1 - handX) to make movement intuitive (Move Right -> Planet Right)
+                const centeredX = (1 - handX) - 0.5; // Range: -0.5 to 0.5
+                const centeredY = handY - 0.5;       // Range: -0.5 to 0.5
+
+                // Calculate target position based on max config
+                targetX = centeredX * 2 * config.maxMoveX; 
+                targetY = centeredY * 2 * config.maxMoveY;
+
+            } else {
+                isHandDetected = false;
+                statusText.innerText = "No hand detected. Planet returning to center.";
+                statusText.style.borderColor = "rgba(255,255,255,0.1)";
+                
+                // Reset target to center
+                targetX = 0;
+                targetY = 0;
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        // Initialize Camera
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        
+        camera.start()
+            .then(() => {
+                statusText.innerText = "Camera active. Move hand to control.";
+            })
+            .catch(err => {
+                console.error(err);
+                statusText.innerText = "Camera access denied or error. Please enable camera.";
+            });
+
+        // --- 3. ANIMATION LOOP ---
+        function animate() {
+            // Apply smoothing (Lerp)
+            currentX = lerp(currentX, targetX, config.smoothness);
+            currentY = lerp(currentY, targetY, config.smoothness);
+
+            // Move Planet
+            // We use transform3d for hardware acceleration
+            // Adding a slight rotation based on X movement for "rolling" effect
+            const rotateY = currentX * 0.05; 
+            const rotateX = -currentY * 0.05;
+
+            planetContainer.style.transform = `
+                translate3d(${currentX}px, ${currentY}px, 0) 
+                rotateY(${rotateY}deg) 
+                rotateX(${rotateX}deg)
+            `;
+
+            // Animate Background (Parallax)
+            drawStars(currentX, currentY);
+
+            requestAnimationFrame(animate);
+        }
+
+        // Start Animation Loop
+        animate();
+
+        // --- 4. UI INTERACTION ---
+        toggleBtn.addEventListener('click', () => {
+            isGlowOn = !isGlowOn;
+            if(isGlowOn) {
+                planet.classList.remove('no-glow');
+                toggleBtn.innerText = "Toggle Glow (ON)";
+            } else {
+                planet.classList.add('no-glow');
+                toggleBtn.innerText = "Toggle Glow (OFF)";
+            }
+        });
+
+    </script>
+</body>
+</html>
